@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "id": "anes.keyboard-brightness",
+  "name": "Keyboard Brightness",
+  "version": "1.3.0",
+  "author": "Anes",
+  "description": "Adjust the keyboard backlight from the Omarchy bar",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Keyboard Brightness",
+    "description": "Keyboard backlight slider",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "device": "*kbd_backlight*",
+      "pollIntervalMs": 1000,
+      "restorePercent": 50
+    },
+    "schema": [
+      {
+        "key": "device",
+        "type": "string",
+        "label": "Brightness device",
+        "defaultValue": "*kbd_backlight*",
+        "description": "brightnessctl device name or wildcard"
+      },
+      {
+        "key": "pollIntervalMs",
+        "type": "integer",
+        "label": "Poll interval (ms)",
+        "min": 500,
+        "max": 30000,
+        "step": 500,
+        "defaultValue": 1000
+      },
+      {
+        "key": "restorePercent",
+        "type": "integer",
+        "label": "Fallback restore brightness (%)",
+        "min": 1,
+        "max": 100,
+        "step": 5,
+        "defaultValue": 50,
+        "description": "Used when the plugin starts while the backlight is already off"
+      }
+    ]
+  }
+}
