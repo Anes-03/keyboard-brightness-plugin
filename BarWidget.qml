@@ -6,8 +6,8 @@ import "Brightness.js" as Brightness
 
 Panel {
   id: root
-  moduleName: "anes.keyboard-brightness"
-  ipcTarget: "anes.keyboard-brightness"
+  moduleName: "io.github.anes-03.keyboard-brightness"
+  ipcTarget: "io.github.anes-03.keyboard-brightness"
   // The widget has no documented external IPC actions. Avoid registering an
   // idle handler, which also reduces hot-reload exposure while a poll exits.
   manageIpc: false

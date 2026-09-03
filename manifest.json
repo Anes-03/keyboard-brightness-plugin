@@ -1,20 +1,21 @@
 {
   "schemaVersion": 1,
-  "id": "anes.keyboard-brightness",
+  "id": "io.github.anes-03.keyboard-brightness",
   "name": "Keyboard Brightness",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "author": "Anes",
+  "license": "MIT",
   "description": "Adjust the keyboard backlight from the Omarchy bar",
   "kinds": [
     "bar-widget"
   ],
   "entryPoints": {
-    "barWidget": "Panel.qml"
+    "barWidget": "BarWidget.qml"
   },
   "barWidget": {
     "displayName": "Keyboard Brightness",
     "description": "Keyboard backlight slider",
-    "category": "System",
+    "category": "Hardware",
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {

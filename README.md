@@ -2,7 +2,7 @@
 
 An Omarchy bar widget for adjusting the keyboard backlight.
 
-![Keyboard Brightness panel](docs/preview.png)
+![Keyboard Brightness panel](preview.png)
 
 ## Features
 
@@ -42,8 +42,7 @@ omarchy pkg add brightnessctl
 
 ## Installation
 
-After this repository has been published on GitHub, install and enable the
-plugin with:
+Once this repository is public, install and enable the plugin with:
 
 ```sh
 omarchy plugin add https://github.com/Anes-03/keyboard-brightness-plugin.git --enable
@@ -54,15 +53,18 @@ widget in its default bar section. If it is installed but not visible, enable
 it explicitly:
 
 ```sh
-omarchy plugin enable anes.keyboard-brightness --section right
+omarchy plugin enable io.github.anes-03.keyboard-brightness --section right
 ```
 
 To update or remove the installed plugin later:
 
 ```sh
-omarchy plugin update anes.keyboard-brightness
-omarchy plugin remove anes.keyboard-brightness
+omarchy plugin update io.github.anes-03.keyboard-brightness
+omarchy plugin remove io.github.anes-03.keyboard-brightness
 ```
+
+Removing the plugin deletes only its installed plugin copy. It does not
+uninstall `brightnessctl` or change the keyboard backlight device.
 
 ## Settings
 
@@ -98,7 +100,7 @@ fails, check whether the logged-in user has permission to control the device.
 Validate an installed copy of the plugin with:
 
 ```sh
-omarchy plugin validate ~/.config/omarchy/plugins/anes.keyboard-brightness
+omarchy plugin validate ~/.config/omarchy/plugins/io.github.anes-03.keyboard-brightness
 ```
 
 ## Tests
