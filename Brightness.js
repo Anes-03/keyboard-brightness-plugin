@@ -22,6 +22,43 @@ function iconFor(percent) {
   return clampPercent(percent) > 0 ? "󰌌" : "󰌐"
 }
 
+function normalizeDevicePattern(value) {
+  var fallback = "*kbd_backlight*"
+  var candidate = value === undefined || value === null
+    ? ""
+    : String(value).trim()
+
+  if (candidate.length === 0 || candidate.length > 128) return fallback
+
+  for (var i = 0; i < candidate.length; i++) {
+    var code = candidate.charCodeAt(i)
+    if (code <= 31 || code === 127 || candidate[i] === "/") return fallback
+  }
+
+  return candidate
+}
+
+function normalizePollIntervalMs(value) {
+  var interval = Number(value)
+  if (!isFinite(interval)) return 1000
+  return Math.min(30000, Math.max(500, Math.round(interval)))
+}
+
+function appendBounded(current, incoming, limit) {
+  var maximum = Math.floor(Number(limit))
+  if (!isFinite(maximum) || maximum < 0) maximum = 0
+
+  var existing = String(current || "")
+  var chunk = String(incoming || "")
+  if (existing.length > maximum) existing = existing.slice(0, maximum)
+
+  var remaining = Math.max(0, maximum - existing.length)
+  return {
+    text: existing + chunk.slice(0, remaining),
+    exceeded: chunk.length > remaining
+  }
+}
+
 function parseBrightness(output) {
   var lines = String(output || "").trim().split(/\r?\n/)
   for (var i = 0; i < lines.length; i++) {

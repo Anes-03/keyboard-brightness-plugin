@@ -17,6 +17,12 @@ The widget controls Linux keyboard-backlight LEDs through `brightnessctl`.
 By default, it uses the device wildcard `*kbd_backlight*`, which covers names
 such as `kbd_backlight`, `smc::kbd_backlight`, and `tpacpi::kbd_backlight`.
 
+For predictable execution, the widget invokes `/usr/bin/brightnessctl`
+directly with a minimal environment. Each output stream is read incrementally
+and capped, and timed-out commands are terminated and then force-killed if
+they do not exit during the grace period. Device-provided error text is shown
+only as plain text.
+
 ## Compatibility
 
 This plugin was developed and tested on an Apple Silicon M2 MacBook Air
@@ -73,6 +79,10 @@ The plugin exposes these settings through the Omarchy plugin settings UI:
 - `device`: an exact `brightnessctl` device name or wildcard
 - `pollIntervalMs`: polling interval while the device is available
 - `restorePercent`: fallback used when the plugin starts with the light off
+
+Device patterns longer than 128 characters or containing control characters or
+path separators fall back to `*kbd_backlight*`. The polling interval is enforced
+between 500 and 30000 milliseconds even when settings are edited manually.
 
 When no matching device is available, polling is automatically slowed down.
 The last non-zero brightness is remembered for the lifetime of the widget.

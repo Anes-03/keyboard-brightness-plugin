@@ -85,6 +85,55 @@ TestCase {
     compare(Brightness.iconFor(data.input), data.expected)
   }
 
+  function test_normalizeDevicePattern_data() {
+    return [
+      { tag: "exact device", input: "smc::kbd_backlight", expected: "smc::kbd_backlight" },
+      { tag: "wildcard", input: "*kbd_backlight*", expected: "*kbd_backlight*" },
+      { tag: "trim whitespace", input: "  tpacpi::kbd_backlight  ", expected: "tpacpi::kbd_backlight" },
+      { tag: "empty", input: "   ", expected: "*kbd_backlight*" },
+      { tag: "too long", input: "x".repeat(129), expected: "*kbd_backlight*" },
+      { tag: "control character", input: "kbd\nbacklight", expected: "*kbd_backlight*" },
+      { tag: "path separator", input: "../kbd_backlight", expected: "*kbd_backlight*" }
+    ]
+  }
+
+  function test_normalizeDevicePattern(data) {
+    compare(Brightness.normalizeDevicePattern(data.input), data.expected)
+  }
+
+  function test_normalizePollIntervalMs_data() {
+    return [
+      { tag: "normal", input: 1000, expected: 1000 },
+      { tag: "rounding", input: 1250.6, expected: 1251 },
+      { tag: "lower bound", input: 1, expected: 500 },
+      { tag: "upper bound", input: 999999, expected: 30000 },
+      { tag: "numeric string", input: "2500", expected: 2500 },
+      { tag: "invalid", input: "invalid", expected: 1000 }
+    ]
+  }
+
+  function test_normalizePollIntervalMs(data) {
+    compare(Brightness.normalizePollIntervalMs(data.input), data.expected)
+  }
+
+  function test_appendBounded() {
+    var withinLimit = Brightness.appendBounded("abc", "def", 6)
+    compare(withinLimit.text, "abcdef")
+    compare(withinLimit.exceeded, false)
+
+    var truncated = Brightness.appendBounded("abc", "defghi", 6)
+    compare(truncated.text, "abcdef")
+    compare(truncated.exceeded, true)
+
+    var alreadyFull = Brightness.appendBounded("abcdef", "x", 6)
+    compare(alreadyFull.text, "abcdef")
+    compare(alreadyFull.exceeded, true)
+
+    var invalidLimit = Brightness.appendBounded("abc", "def", "invalid")
+    compare(invalidLimit.text, "")
+    compare(invalidLimit.exceeded, true)
+  }
+
   function test_parseBrightness(data) {
     var result = Brightness.parseBrightness(data.output)
     compare(result.valid, data.valid)

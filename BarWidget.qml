@@ -25,18 +25,34 @@ Panel {
   property string writeError: ""
   property int lastNonZeroPercent: 0
   property real wheelAccumulator: 0
+  property bool destroying: false
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property string errorMessage: writeError !== "" ? writeError : readError
-  readonly property string devicePattern: {
-    var configured = String(setting("device", "*kbd_backlight*")).trim()
-    return configured !== "" ? configured : "*kbd_backlight*"
+  readonly property string brightnessctlPath: "/usr/bin/brightnessctl"
+  readonly property int maxProcessStreamChars: 2048
+  readonly property int terminationGraceMs: 250
+  readonly property int sigTerm: 15
+  readonly property int sigKill: 9
+  readonly property var processEnvironment: ({
+    "LANG": "C",
+    "LC_ALL": "C"
+  })
+  readonly property string tooltipMessage: {
+    if (available) {
+      return errorMessage !== ""
+        ? "Keyboard brightness error — open for details"
+        : "Keyboard brightness: " + brightnessPercent + "%"
+    }
+    return readError !== ""
+      ? "Keyboard backlight unavailable — open for details"
+      : "No keyboard backlight found"
   }
-  readonly property int pollIntervalMs: {
-    var configured = Number(setting("pollIntervalMs", 1000))
-    return isFinite(configured) ? Math.max(500, Math.round(configured)) : 1000
-  }
+  readonly property string devicePattern: Brightness.normalizeDevicePattern(
+    setting("device", "*kbd_backlight*"))
+  readonly property int pollIntervalMs: Brightness.normalizePollIntervalMs(
+    setting("pollIntervalMs", 1000))
   readonly property int defaultRestorePercent: {
     var configured = Number(setting("restorePercent", 50))
     return isFinite(configured) ? Math.max(1, clamp(configured)) : 50
@@ -54,20 +70,70 @@ Panel {
     return Brightness.failureMessage(prefix, output, exitCode)
   }
 
+  function resetProcess(proc) {
+    proc.timedOut = false
+    proc.outputExceeded = false
+    proc.stopRequested = false
+    proc.attemptActive = true
+    proc.startedSuccessfully = false
+    proc.stdoutText = ""
+    proc.stderrText = ""
+  }
+
+  function requestProcessStop(proc, killTimer) {
+    if (!proc.running || proc.stopRequested) return
+    proc.stopRequested = true
+    proc.signal(sigTerm)
+    killTimer.restart()
+  }
+
+  function captureProcessOutput(proc, channel, data, killTimer) {
+    if (destroying) return
+    var current = channel === "stdout" ? proc.stdoutText : proc.stderrText
+    var result = Brightness.appendBounded(current, data, maxProcessStreamChars)
+    if (channel === "stdout") proc.stdoutText = result.text
+    else proc.stderrText = result.text
+
+    if (result.exceeded) {
+      proc.outputExceeded = true
+      requestProcessStop(proc, killTimer)
+    }
+  }
+
+  function cleanupProcesses() {
+    destroying = true
+    pollTimer.stop()
+    setDebounce.stop()
+    readTimeout.stop()
+    setTimeout.stop()
+    readKillTimer.stop()
+    setKillTimer.stop()
+
+    // Destruction cannot wait for a grace timer, so explicitly signal both
+    // stages before the Process wrappers themselves are destroyed.
+    if (readProc.running) {
+      readProc.signal(sigTerm)
+      if (readProc.running) readProc.signal(sigKill)
+    }
+    if (setProc.running) {
+      setProc.signal(sigTerm)
+      if (setProc.running) setProc.signal(sigKill)
+    }
+  }
+
   function refresh() {
-    if (readProc.running || setProc.running || setDebounce.running) return
+    if (destroying || readProc.running || setProc.running || setDebounce.running) return
     readProc.generation = changeGeneration
-    readProc.timedOut = false
-    readProc.attemptActive = true
+    resetProcess(readProc)
     readTimeout.restart()
     readProc.running = true
   }
 
   function startSet(percent) {
+    if (destroying) return
     setQueued = false
-    setProc.command = ["brightnessctl", "-q", "-d", devicePattern, "set", percent + "%"]
-    setProc.timedOut = false
-    setProc.attemptActive = true
+    setProc.command = [brightnessctlPath, "-q", "-d", devicePattern, "set", percent + "%"]
+    resetProcess(setProc)
     setTimeout.restart()
     setProc.running = true
   }
@@ -115,6 +181,7 @@ Panel {
   onOpenedChanged: if (opened) refresh()
   // The bar injects per-widget settings immediately after construction.
   Component.onCompleted: Qt.callLater(root.refresh)
+  Component.onDestruction: root.cleanupProcesses()
 
   Timer {
     // Keyboard brightness can also change through the hardware shortcuts.
@@ -144,12 +211,15 @@ Panel {
     onTriggered: {
       if (!readProc.running) return
       readProc.timedOut = true
-      readProc.running = false
-      if (readProc.generation !== root.changeGeneration) return
-      root.available = false
-      root.readFailures++
-      root.readError = "Timed out while reading the keyboard backlight"
+      root.requestProcessStop(readProc, readKillTimer)
     }
+  }
+
+  Timer {
+    id: readKillTimer
+    interval: root.terminationGraceMs
+    repeat: false
+    onTriggered: if (readProc.running) readProc.signal(root.sigKill)
   }
 
   Timer {
@@ -159,41 +229,80 @@ Panel {
     onTriggered: {
       if (!setProc.running) return
       setProc.timedOut = true
-      setProc.running = false
+      root.requestProcessStop(setProc, setKillTimer)
     }
+  }
+
+  Timer {
+    id: setKillTimer
+    interval: root.terminationGraceMs
+    repeat: false
+    onTriggered: if (setProc.running) setProc.signal(root.sigKill)
   }
 
   Process {
     id: readProc
-    command: ["brightnessctl", "-m", "-d", root.devicePattern, "info"]
+    command: [root.brightnessctlPath, "-m", "-d", root.devicePattern, "info"]
+    clearEnvironment: true
+    environment: root.processEnvironment
     property int generation: 0
     property bool timedOut: false
+    property bool outputExceeded: false
+    property bool stopRequested: false
     property bool attemptActive: false
-    stdout: StdioCollector {
-      id: readStdout
-      waitForEnd: true
+    property bool startedSuccessfully: false
+    property string stdoutText: ""
+    property string stderrText: ""
+    stdout: SplitParser {
+      // An empty marker forwards arbitrary chunks without retaining an
+      // unterminated line inside SplitParser.
+      splitMarker: ""
+      onRead: function(data) {
+        root.captureProcessOutput(readProc, "stdout", data, readKillTimer)
+      }
     }
-    stderr: StdioCollector {
-      id: readStderr
-      waitForEnd: true
+    stderr: SplitParser {
+      splitMarker: ""
+      onRead: function(data) {
+        root.captureProcessOutput(readProc, "stderr", data, readKillTimer)
+      }
     }
+    onStarted: startedSuccessfully = true
     onExited: function(exitCode) {
+      // This callback is the reaping boundary. No replacement process is
+      // started before Quickshell confirms that this child has exited.
       attemptActive = false
+      stopRequested = false
       readTimeout.stop()
+      readKillTimer.stop()
+      if (root.destroying) return
       // A read that started before a user change is stale, regardless of
       // whether the driver completed it before or after the write.
       if (generation !== root.changeGeneration) return
-      if (timedOut) return
+
+      if (outputExceeded) {
+        root.available = false
+        root.readFailures++
+        root.readError = "brightnessctl produced too much output"
+        return
+      }
+
+      if (timedOut) {
+        root.available = false
+        root.readFailures++
+        root.readError = "Timed out while reading the keyboard backlight"
+        return
+      }
 
       if (exitCode !== 0) {
         root.available = false
         root.readFailures++
         root.readError = root.failureMessage(
-          "Keyboard backlight unavailable", readStderr.text || readStdout.text, exitCode)
+          "Keyboard backlight unavailable", stderrText || stdoutText, exitCode)
         return
       }
 
-      var result = root.parseBrightness(readStdout.text)
+      var result = root.parseBrightness(stdoutText)
       if (!result.valid) {
         root.available = false
         root.readFailures++
@@ -211,9 +320,10 @@ Panel {
     }
     onRunningChanged: {
       // Quickshell does not emit exited() when the executable cannot start.
-      if (running || !attemptActive || timedOut) return
+      if (running || !attemptActive || startedSuccessfully || root.destroying) return
       attemptActive = false
       readTimeout.stop()
+      readKillTimer.stop()
       if (generation !== root.changeGeneration) return
       root.available = false
       root.readFailures++
@@ -223,31 +333,57 @@ Panel {
 
   Process {
     id: setProc
+    clearEnvironment: true
+    environment: root.processEnvironment
     property bool timedOut: false
+    property bool outputExceeded: false
+    property bool stopRequested: false
     property bool attemptActive: false
-    stdout: StdioCollector {
-      id: setStdout
-      waitForEnd: true
+    property bool startedSuccessfully: false
+    property string stdoutText: ""
+    property string stderrText: ""
+    stdout: SplitParser {
+      splitMarker: ""
+      onRead: function(data) {
+        root.captureProcessOutput(setProc, "stdout", data, setKillTimer)
+      }
     }
-    stderr: StdioCollector {
-      id: setStderr
-      waitForEnd: true
+    stderr: SplitParser {
+      splitMarker: ""
+      onRead: function(data) {
+        root.captureProcessOutput(setProc, "stderr", data, setKillTimer)
+      }
     }
+    onStarted: startedSuccessfully = true
     onExited: function(exitCode) {
+      // Treat onExited as the reap confirmation before consuming a queued set.
       attemptActive = false
+      stopRequested = false
       setTimeout.stop()
-      if (!root.setQueued) {
-        if (timedOut)
-          root.writeError = "Timed out while setting the keyboard backlight"
-        else if (exitCode !== 0)
-          root.writeError = root.failureMessage(
-            "Could not set keyboard brightness", setStderr.text || setStdout.text, exitCode)
+      setKillTimer.stop()
+      if (root.destroying) return
+
+      if (outputExceeded) {
+        root.setQueued = false
+        root.writeError = "brightnessctl produced too much output"
+        Qt.callLater(root.refresh)
+        return
+      }
+
+      if (timedOut) {
+        root.setQueued = false
+        root.writeError = "Timed out while setting the keyboard backlight"
+        Qt.callLater(root.refresh)
+        return
       }
 
       if (root.setQueued) {
         var nextPercent = root.pendingPercent
         root.startSet(nextPercent)
       } else {
+        if (exitCode !== 0)
+          root.writeError = root.failureMessage(
+            "Could not set keyboard brightness", stderrText || stdoutText, exitCode)
         // Read the value accepted by the driver instead of assuming it maps
         // exactly to the requested percentage.
         Qt.callLater(root.refresh)
@@ -255,9 +391,10 @@ Panel {
     }
     onRunningChanged: {
       // FailedToStart changes running back to false without exited().
-      if (running || !attemptActive || timedOut) return
+      if (running || !attemptActive || startedSuccessfully || root.destroying) return
       attemptActive = false
       setTimeout.stop()
+      setKillTimer.stop()
       root.setQueued = false
       root.writeError = "brightnessctl could not be started"
       Qt.callLater(root.refresh)
@@ -269,13 +406,9 @@ Panel {
     anchors.fill: parent
     bar: root.bar
     text: root.iconFor(root.brightnessPercent)
-    tooltipText: root.available
-      ? (root.errorMessage !== ""
-          ? root.errorMessage
-          : "Keyboard brightness: " + root.brightnessPercent + "%")
-      : (root.errorMessage !== ""
-          ? root.errorMessage
-          : "No keyboard backlight found")
+    // The shell's shared tooltip uses Text.AutoText. Keep external process
+    // output out of that sink and show details only in our PlainText field.
+    tooltipText: root.tooltipMessage
 
     onPressed: function(mouseButton) {
       if (mouseButton === Qt.RightButton) {
@@ -422,6 +555,7 @@ Panel {
           text: root.errorMessage !== ""
             ? root.errorMessage
             : "Mouse wheel: ±10%  ·  Right-click: toggle"
+          textFormat: Text.PlainText
           color: Qt.darker(root.foreground, root.errorMessage !== "" ? 1.25 : 1.5)
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
